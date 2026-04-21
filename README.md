@@ -103,6 +103,21 @@ SNAPSHOT_FETCH_SIZE=1000
 
 这个文件默认不会提交到 git，避免把真实表名、真实业务 SQL、真实 schema 带出去。
 
+如果要启用随机调度，可以在 `config/tasks.yaml` 里加入：
+
+```yaml
+scheduler:
+  enabled: true
+  schedule_name: daily-random-50
+  timezone: Asia/Shanghai
+  runs_per_day: 50
+  parameter_min: 10
+  parameter_max: 100
+  read_source_table: SNAPSHOT_JOB_RUNS
+  read_limit: 3
+  poll_interval_seconds: 30
+```
+
 ## 连接约定
 
 常见用法：
@@ -179,6 +194,34 @@ python -m oracle_adw_snapshotter.cli scheduler --env-file .env --config config/t
 
 ```bash
 python -m oracle_adw_snapshotter.cli scheduler --env-file .env --config config/tasks.yaml --once
+```
+
+### 6. 使用 systemd 持续运行 scheduler
+
+```ini
+[Unit]
+Description=Oracle ADW Snapshotter Scheduler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/path/to/oracle-adw-snapshotter
+ExecStart=/path/to/oracle-adw-snapshotter/.venv/bin/python -m oracle_adw_snapshotter.cli scheduler --env-file .env --config config/tasks.yaml
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
+```
+
+示例启用命令：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now oracle-adw-snapshotter-scheduler.service
+sudo systemctl --no-pager -l status oracle-adw-snapshotter-scheduler.service
 ```
 
 ## 测试

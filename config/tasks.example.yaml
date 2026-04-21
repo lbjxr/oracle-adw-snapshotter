@@ -4,6 +4,17 @@ defaults:
   commit_every_job: true
   query_timeout_seconds: 1800
 
+scheduler:
+  enabled: true
+  schedule_name: daily-random-50
+  timezone: Asia/Shanghai
+  runs_per_day: 50
+  parameter_min: 10
+  parameter_max: 100
+  read_source_table: SNAPSHOT_JOB_RUNS
+  read_limit: 3
+  poll_interval_seconds: 30
+
 jobs:
   - name: adw_orders_last_7d
     enabled: true
