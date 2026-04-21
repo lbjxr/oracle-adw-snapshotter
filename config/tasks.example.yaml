@@ -1,0 +1,31 @@
+defaults:
+  target_schema: SNAPSHOT_ARCHIVE
+  snapshot_table_prefix: SNAP_
+  commit_every_job: true
+  query_timeout_seconds: 1800
+
+jobs:
+  - name: adw_orders_last_7d
+    enabled: true
+    mode: query
+    source_sql: |
+      SELECT order_id,
+             customer_id,
+             amount,
+             status,
+             created_at,
+             updated_at
+      FROM sales.orders
+      WHERE updated_at >= SYSTIMESTAMP - INTERVAL '7' DAY
+    target_table: SNAP_ORDERS_LAST_7D
+    write_mode: append
+    tags: [sales, adw, rolling-window]
+
+  - name: adw_customers_active
+    enabled: true
+    mode: table
+    source_table: crm.customers
+    target_table: SNAP_CUSTOMERS_ACTIVE
+    write_mode: append
+    where_clause: "status = 'ACTIVE' AND NVL(deleted_flag, 'N') = 'N'"
+    tags: [crm, adw, full]

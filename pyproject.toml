@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "oracle-adw-snapshotter"
+version = "0.1.0"
+description = "Modular snapshot ingestion scaffold for Oracle Autonomous Data Warehouse"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+  { name = "OpenClaw" }
+]
+dependencies = [
+  "oracledb>=2.0.0",
+  "python-dotenv>=1.0.1",
+  "PyYAML>=6.0.1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+]
+
+[project.scripts]
+oracle-adw-snapshotter = "oracle_adw_snapshotter.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
