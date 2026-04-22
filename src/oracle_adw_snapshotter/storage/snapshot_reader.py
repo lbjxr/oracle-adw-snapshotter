@@ -21,15 +21,19 @@ class SnapshotRecord:
     collected_at_utc: datetime | None
     source_sql: str | None
     payload_json: Any
+    extra_fields: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "SNAPSHOT_ID": self.snapshot_id,
             "JOB_NAME": self.job_name,
             "COLLECTED_AT_UTC": self.collected_at_utc.isoformat() if self.collected_at_utc else None,
             "SOURCE_SQL": self.source_sql,
             "PAYLOAD_JSON": self.payload_json,
         }
+        if self.extra_fields:
+            return dict(self.extra_fields)
+        return payload
 
 
 class SnapshotReader:
@@ -46,17 +50,33 @@ class SnapshotReader:
     def fetch_latest_rows(self, connection, table_name: str, limit: int) -> list[SnapshotRecord]:
         normalized_table = self._normalize_table_name(table_name)
         safe_limit = max(int(limit), 1)
+        columns = self._fetch_table_columns(connection, normalized_table)
+        canonical_columns = ["SNAPSHOT_ID", "JOB_NAME", "COLLECTED_AT_UTC", "SOURCE_SQL", "PAYLOAD_JSON"]
         cursor = connection.cursor()
         try:
+            if all(column in columns for column in canonical_columns):
+                cursor.execute(
+                    f"""
+                    SELECT SNAPSHOT_ID, JOB_NAME, COLLECTED_AT_UTC, SOURCE_SQL, PAYLOAD_JSON
+                    FROM {normalized_table}
+                    ORDER BY COLLECTED_AT_UTC DESC, SNAPSHOT_ID DESC
+                    FETCH FIRST {safe_limit} ROWS ONLY
+                    """
+                )
+                return [self._row_to_record(row) for row in cursor.fetchall()]
+
+            order_column = self._pick_order_column(columns)
+            select_columns = ", ".join(columns)
+            order_clause = f" ORDER BY {order_column} DESC" if order_column else ""
             cursor.execute(
                 f"""
-                SELECT SNAPSHOT_ID, JOB_NAME, COLLECTED_AT_UTC, SOURCE_SQL, PAYLOAD_JSON
+                SELECT {select_columns}
                 FROM {normalized_table}
-                ORDER BY COLLECTED_AT_UTC DESC, SNAPSHOT_ID DESC
+                {order_clause}
                 FETCH FIRST {safe_limit} ROWS ONLY
                 """
             )
-            return [self._row_to_record(row) for row in cursor.fetchall()]
+            return [self._generic_row_to_record(columns, row) for row in cursor.fetchall()]
         finally:
             cursor.close()
 
@@ -165,6 +185,25 @@ class SnapshotReader:
         )
 
     @staticmethod
+    def _generic_row_to_record(columns: list[str], row: tuple[Any, ...]) -> SnapshotRecord:
+        payload: dict[str, Any] = {}
+        for column, value in zip(columns, row, strict=False):
+            if isinstance(value, datetime):
+                payload[column] = value.isoformat()
+                continue
+            text_value = SnapshotReader._lob_to_text(value)
+            parsed_value = SnapshotReader._parse_payload(text_value) if isinstance(text_value, str) else value
+            payload[column] = parsed_value
+        return SnapshotRecord(
+            snapshot_id=None,
+            job_name=None,
+            collected_at_utc=None,
+            source_sql=None,
+            payload_json=payload,
+            extra_fields=payload,
+        )
+
+    @staticmethod
     def _parse_payload(payload_text: str | None) -> Any:
         if payload_text is None:
             return None
@@ -199,6 +238,39 @@ class SnapshotReader:
         if not _IDENTIFIER_RE.match(normalized):
             raise ValueError(f"Unsafe or unsupported table name: {table_name}")
         return normalized
+
+    @staticmethod
+    def _fetch_table_columns(connection, table_name: str) -> list[str]:
+        cursor = connection.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT column_name
+                FROM user_tab_columns
+                WHERE table_name = :table_name
+                ORDER BY column_id
+                """,
+                table_name=table_name,
+            )
+            return [row[0] for row in cursor.fetchall()]
+        finally:
+            cursor.close()
+
+    @staticmethod
+    def _pick_order_column(columns: list[str]) -> str | None:
+        for candidate in (
+            "COLLECTED_AT_UTC",
+            "CREATED_AT_UTC",
+            "CREATED_AT",
+            "STARTED_AT_UTC",
+            "PLANNED_AT_UTC",
+            "LOG_ID",
+            "SCHEDULE_RUN_ID",
+            "SNAPSHOT_ID",
+        ):
+            if candidate in columns:
+                return candidate
+        return None
 
 
 def records_to_json_text(records: list[SnapshotRecord]) -> str:

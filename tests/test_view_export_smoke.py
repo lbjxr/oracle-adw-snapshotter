@@ -5,6 +5,7 @@ import io
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 from oracle_adw_snapshotter.cli import build_parser
 from oracle_adw_snapshotter.config.settings import load_app_config
@@ -104,6 +105,51 @@ def test_snapshot_reader_pretty_payload_and_export(tmp_path: Path) -> None:
     assert '"SNAPSHOT_ID": 101' in json_path.read_text(encoding="utf-8")
     exported_rows = list(csv.DictReader(io.StringIO(csv_path.read_text(encoding="utf-8"))))
     assert json.loads(exported_rows[1]["PAYLOAD_JSON"]) == {"sample": 2, "text": "hello"}
+
+
+def test_snapshot_reader_handles_generic_table_rows() -> None:
+    class FakeCursor:
+        def __init__(self) -> None:
+            self._rows = []
+
+        def execute(self, sql: str, **kwargs) -> None:
+            if "FROM user_tab_columns" in sql:
+                self._rows = [("SCHEDULE_RUN_ID",), ("SCHEDULE_NAME",), ("STATUS",), ("CREATED_AT_UTC",)]
+            else:
+                self._rows = [(71, "daily-random-50", "SUCCESS", datetime(2026, 4, 22, 8, 28, 17, tzinfo=timezone.utc))]
+
+        def fetchall(self):
+            return self._rows
+
+        def close(self) -> None:
+            return None
+
+    class FakeConnection:
+        def cursor(self):
+            return FakeCursor()
+
+    reader = SnapshotReader()
+    records = reader.fetch_latest_rows(FakeConnection(), "SNAPSHOT_SCHEDULE_RUNS", limit=5)
+    assert len(records) == 1
+    payload = records[0].to_dict()
+    assert payload["SCHEDULE_RUN_ID"] == 71
+    assert payload["SCHEDULE_NAME"] == "daily-random-50"
+    assert payload["STATUS"] == "SUCCESS"
+    assert payload["CREATED_AT_UTC"].startswith("2026-04-22T08:28:17")
+
+
+def test_generic_records_render_to_json_text() -> None:
+    record = SnapshotRecord(
+        snapshot_id=None,
+        job_name=None,
+        collected_at_utc=None,
+        source_sql=None,
+        payload_json={"SCHEDULE_RUN_ID": 71, "STATUS": "SUCCESS"},
+        extra_fields={"SCHEDULE_RUN_ID": 71, "STATUS": "SUCCESS"},
+    )
+    text = records_to_json_text([record])
+    assert '"SCHEDULE_RUN_ID": 71' in text
+    assert '"STATUS": "SUCCESS"' in text
 
 
 def _write_fixture_files(tmp_path: Path) -> tuple[Path, Path]:
