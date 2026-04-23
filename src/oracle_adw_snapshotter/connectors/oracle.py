@@ -4,6 +4,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
+import socket
+
 try:
     import oracledb
 except ModuleNotFoundError:  # pragma: no cover - allows import smoke tests without dependency
@@ -17,6 +19,28 @@ class OracleConnectionConfigError(ValueError):
 
 
 class OracleConnector:
+    _DISCONNECT_ERROR_MARKERS = (
+        "DPY-4011",
+        "DPY-1001",
+        "DPI-1080",
+        "DPI-1010",
+        "ORA-03113",
+        "ORA-03114",
+        "ORA-03135",
+        "ORA-12170",
+        "ORA-12537",
+        "ORA-12547",
+        "ORA-12570",
+        "ORA-12571",
+        "ORA-12637",
+        "connection reset",
+        "connection closed",
+        "network closed the connection",
+        "not connected",
+        "socket is closed",
+        "broken pipe",
+    )
+
     def __init__(self, config: DatabaseConfig):
         self.config = config
         self._client_initialized = False
@@ -173,6 +197,18 @@ class OracleConnector:
             "session_user": row[2] if row else None,
         }
         return report
+
+    @staticmethod
+    def is_disconnect_error(exc: BaseException) -> bool:
+        current: BaseException | None = exc
+        while current is not None:
+            if isinstance(current, (ConnectionError, BrokenPipeError, TimeoutError, socket.timeout)):
+                return True
+            message = str(current).upper()
+            if any(marker.upper() in message for marker in OracleConnector._DISCONNECT_ERROR_MARKERS):
+                return True
+            current = current.__cause__ or current.__context__
+        return False
 
     @contextmanager
     def session(self) -> Iterator[Any]:
