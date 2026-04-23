@@ -209,8 +209,7 @@ def main() -> int:
     if args.command == "scheduler":
         scheduler_loop = RandomSchedulerLoop(execution_runner=RandomizedExecutionRunner())
         try:
-            with connector.session() as connection:
-                results = scheduler_loop.run_forever(connection=connection, app_config=app_config, once=args.once)
+            results = scheduler_loop.run_forever(connect=connector.session, app_config=app_config, once=args.once)
         except OracleConnectionConfigError as exc:
             _print_json(
                 {

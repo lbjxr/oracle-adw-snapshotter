@@ -3,8 +3,10 @@ from __future__ import annotations
 import time
 from dataclasses import asdict
 from datetime import datetime
+from typing import Callable
 from zoneinfo import ZoneInfo
 
+from oracle_adw_snapshotter.connectors.oracle import OracleConnector
 from oracle_adw_snapshotter.jobs.random_runner import RandomizedExecutionRunner
 from oracle_adw_snapshotter.models.types import AppConfig
 from oracle_adw_snapshotter.services.random_schedule import RandomSchedulePlanner
@@ -16,12 +18,21 @@ class RandomSchedulerLoop:
         planner: RandomSchedulePlanner | None = None,
         execution_runner: RandomizedExecutionRunner | None = None,
         sleeper=time.sleep,
+        reconnect_retry_delay_seconds: int = 5,
+        max_reconnect_attempts_per_run: int = 2,
     ):
         self.planner = planner or RandomSchedulePlanner()
         self.execution_runner = execution_runner or RandomizedExecutionRunner()
         self.sleeper = sleeper
+        self.reconnect_retry_delay_seconds = max(1, int(reconnect_retry_delay_seconds))
+        self.max_reconnect_attempts_per_run = max(1, int(max_reconnect_attempts_per_run))
 
-    def run_forever(self, connection, app_config: AppConfig, once: bool = False) -> list[dict]:
+    def run_forever(
+        self,
+        connect: Callable[[], object],
+        app_config: AppConfig,
+        once: bool = False,
+    ) -> list[dict]:
         scheduler_config = app_config.scheduler
         tz = ZoneInfo(scheduler_config.timezone)
         completed: list[dict] = []
@@ -54,18 +65,38 @@ class RandomSchedulerLoop:
                 continue
 
             for due in due_runs:
-                result = self.execution_runner.execute_once(
-                    connection,
-                    schedule_name=scheduler_config.schedule_name,
-                    planned_at_utc=due.planned_at_utc,
-                    parameter_min=scheduler_config.parameter_min,
-                    parameter_max=scheduler_config.parameter_max,
-                    read_source_table=scheduler_config.read_source_table,
-                    read_limit=scheduler_config.read_limit,
-                )
-                connection.commit()
+                result = self._execute_due_run(connect=connect, due=due, app_config=app_config)
                 completed.append(asdict(result))
 
             day_plan = pending_runs
             if once:
                 return completed
+
+    def _execute_due_run(self, *, connect: Callable[[], object], due, app_config: AppConfig):
+        scheduler_config = app_config.scheduler
+        last_exc: Exception | None = None
+
+        for attempt in range(1, self.max_reconnect_attempts_per_run + 1):
+            try:
+                with connect() as connection:
+                    result = self.execution_runner.execute_once(
+                        connection,
+                        schedule_name=scheduler_config.schedule_name,
+                        planned_at_utc=due.planned_at_utc,
+                        parameter_min=scheduler_config.parameter_min,
+                        parameter_max=scheduler_config.parameter_max,
+                        read_source_table=scheduler_config.read_source_table,
+                        read_limit=scheduler_config.read_limit,
+                    )
+                    connection.commit()
+                    return result
+            except Exception as exc:
+                last_exc = exc
+                if not OracleConnector.is_disconnect_error(exc):
+                    raise
+                if attempt >= self.max_reconnect_attempts_per_run:
+                    raise
+                self.sleeper(self.reconnect_retry_delay_seconds)
+
+        assert last_exc is not None
+        raise last_exc
