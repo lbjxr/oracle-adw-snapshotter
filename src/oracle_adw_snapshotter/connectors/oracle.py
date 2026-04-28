@@ -159,6 +159,10 @@ class OracleConnector:
             "user": self.config.user,
             "password": self.config.password,
             "dsn": self.config.dsn,
+            "expire_time": self.config.expire_time_minutes,
+            "retry_count": self.config.retry_count,
+            "retry_delay": self.config.retry_delay_seconds,
+            "tcp_connect_timeout": self.config.tcp_connect_timeout_seconds,
         }
         if self.config.wallet_dir:
             connect_kwargs["wallet_location"] = self.config.wallet_dir
