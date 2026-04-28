@@ -101,6 +101,8 @@ ORACLE_RETRY_DELAY_SECONDS=2
 ORACLE_TCP_CONNECT_TIMEOUT_SECONDS=15
 ```
 
+这些参数用于空闲连接保活，以及连接建立阶段的轻量重试。
+
 ### 任务配置说明
 
 `config/tasks.example.yaml` 提供的是公开示例。你自己的真实任务请写到：
@@ -138,13 +140,7 @@ scheduler:
 ORACLE_CONNECTION_MODE=thin
 ORACLE_WALLET_DIR=./secrets/oracle-wallet/Wallet_myadw
 ORACLE_DSN=myadw_high
-ORACLE_EXPIRE_TIME_MINUTES=5
-ORACLE_RETRY_COUNT=3
-ORACLE_RETRY_DELAY_SECONDS=2
-ORACLE_TCP_CONNECT_TIMEOUT_SECONDS=15
 ```
-
-这些网络韧性参数主要用于长连接空闲保活，以及连接建立阶段的轻量重试。
 
 ## 初始化数据库对象
 
