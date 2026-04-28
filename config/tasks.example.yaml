@@ -11,7 +11,7 @@ scheduler:
   runs_per_day: 50
   parameter_min: 10
   parameter_max: 100
-  read_source_table: SNAPSHOT_JOB_RUNS
+  read_source_table: SNAPSHOT_SCHEDULE_RUNS
   read_limit: 3
   poll_interval_seconds: 30
 

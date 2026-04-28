@@ -65,7 +65,7 @@ def load_app_config(config_path: str | None = None, env_file: str | None = None)
         runs_per_day=int(scheduler_raw.get("runs_per_day", 50)),
         parameter_min=int(scheduler_raw.get("parameter_min", 10)),
         parameter_max=int(scheduler_raw.get("parameter_max", 100)),
-        read_source_table=str(scheduler_raw.get("read_source_table", "SNAPSHOT_JOB_RUNS")),
+        read_source_table=str(scheduler_raw.get("read_source_table", "SNAPSHOT_SCHEDULE_RUNS")),
         read_limit=int(scheduler_raw.get("read_limit", 3)),
         poll_interval_seconds=int(scheduler_raw.get("poll_interval_seconds", 30)),
     )
@@ -95,6 +95,10 @@ def load_app_config(config_path: str | None = None, env_file: str | None = None)
         lib_dir=_env("ORACLE_LIB_DIR"),
         connection_mode=((_env("ORACLE_CONNECTION_MODE", "thin") or "thin").strip().lower()),
         fetch_size=int(_env("SNAPSHOT_FETCH_SIZE", "1000") or "1000"),
+        expire_time_minutes=int(_env("ORACLE_EXPIRE_TIME_MINUTES", "5") or "5"),
+        retry_count=int(_env("ORACLE_RETRY_COUNT", "3") or "3"),
+        retry_delay_seconds=int(_env("ORACLE_RETRY_DELAY_SECONDS", "2") or "2"),
+        tcp_connect_timeout_seconds=float(_env("ORACLE_TCP_CONNECT_TIMEOUT_SECONDS", "15") or "15"),
     )
 
     return AppConfig(

@@ -18,6 +18,10 @@ def test_load_app_config_smoke(tmp_path: Path, monkeypatch) -> None:
                 "ORACLE_CONNECTION_MODE=thin",
                 "SNAPSHOT_APP_NAME=test-snapshotter",
                 "SNAPSHOT_FETCH_SIZE=250",
+                "ORACLE_EXPIRE_TIME_MINUTES=7",
+                "ORACLE_RETRY_COUNT=4",
+                "ORACLE_RETRY_DELAY_SECONDS=3",
+                "ORACLE_TCP_CONNECT_TIMEOUT_SECONDS=9.5",
             ]
         ),
         encoding="utf-8",
@@ -48,6 +52,10 @@ jobs:
     assert app_config.app_name == "test-snapshotter"
     assert app_config.db.fetch_size == 250
     assert app_config.db.connection_mode == "thin"
+    assert app_config.db.expire_time_minutes == 7
+    assert app_config.db.retry_count == 4
+    assert app_config.db.retry_delay_seconds == 3
+    assert app_config.db.tcp_connect_timeout_seconds == 9.5
     assert len(app_config.jobs) == 1
     assert app_config.jobs[0].resolved_query().startswith("SELECT 1")
     parser = build_parser()
