@@ -93,7 +93,15 @@ SNAPSHOT_APP_NAME=oracle-adw-snapshotter
 SNAPSHOT_CONFIG_PATH=config/tasks.yaml
 SNAPSHOT_DEFAULT_OWNER=
 SNAPSHOT_FETCH_SIZE=1000
+
+# Oracle network resilience
+ORACLE_EXPIRE_TIME_MINUTES=5
+ORACLE_RETRY_COUNT=3
+ORACLE_RETRY_DELAY_SECONDS=2
+ORACLE_TCP_CONNECT_TIMEOUT_SECONDS=15
 ```
+
+这些参数用于空闲连接保活，以及连接建立阶段的轻量重试。
 
 ### 任务配置说明
 
@@ -113,7 +121,7 @@ scheduler:
   runs_per_day: 50
   parameter_min: 10
   parameter_max: 100
-  read_source_table: SNAPSHOT_JOB_RUNS
+  read_source_table: SNAPSHOT_SCHEDULE_RUNS
   read_limit: 3
   poll_interval_seconds: 30
 ```

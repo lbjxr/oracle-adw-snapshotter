@@ -55,7 +55,7 @@ class RandomSchedulerConfig:
     runs_per_day: int = 50
     parameter_min: int = 10
     parameter_max: int = 100
-    read_source_table: str = "SNAPSHOT_JOB_RUNS"
+    read_source_table: str = "SNAPSHOT_SCHEDULE_RUNS"
     read_limit: int = 3
     poll_interval_seconds: int = 30
 
@@ -71,6 +71,10 @@ class DatabaseConfig:
     lib_dir: str | None = None
     connection_mode: ConnectionMode = "thin"
     fetch_size: int = 1000
+    expire_time_minutes: int = 5
+    retry_count: int = 3
+    retry_delay_seconds: int = 2
+    tcp_connect_timeout_seconds: float = 15.0
 
 
 @dataclass(slots=True)
