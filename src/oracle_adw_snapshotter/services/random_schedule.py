@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import random
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -23,6 +24,7 @@ class RandomSchedulePlanner:
         run_date: date,
         timezone_name: str,
         runs_per_day: int,
+        schedule_name: str = "default",
         seed: int | None = None,
     ) -> list[ScheduledRun]:
         if runs_per_day <= 0:
@@ -31,7 +33,13 @@ class RandomSchedulePlanner:
             raise ValueError("runs_per_day cannot exceed seconds in a day")
 
         tz = ZoneInfo(timezone_name)
-        rng = random.Random(seed)
+        effective_seed = seed if seed is not None else self._derive_seed(
+            run_date=run_date,
+            timezone_name=timezone_name,
+            runs_per_day=runs_per_day,
+            schedule_name=schedule_name,
+        )
+        rng = random.Random(effective_seed)
         second_offsets = sorted(rng.sample(range(24 * 60 * 60), runs_per_day))
         start_of_day = datetime.combine(run_date, time.min, tzinfo=tz)
         return [
@@ -41,6 +49,12 @@ class RandomSchedulePlanner:
             )
             for index, offset in enumerate(second_offsets, start=1)
         ]
+
+    @staticmethod
+    def _derive_seed(*, run_date: date, timezone_name: str, runs_per_day: int, schedule_name: str) -> int:
+        seed_material = f"{run_date.isoformat()}|{timezone_name}|{runs_per_day}|{schedule_name}"
+        digest = hashlib.blake2b(seed_material.encode("utf-8"), digest_size=8).digest()
+        return int.from_bytes(digest, byteorder="big", signed=False)
 
     @staticmethod
     def next_wait_seconds(now_local: datetime, pending_runs: list[ScheduledRun], fallback_seconds: int) -> int:

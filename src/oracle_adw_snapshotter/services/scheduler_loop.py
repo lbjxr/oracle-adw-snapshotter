@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import asdict
 from datetime import datetime
@@ -10,6 +11,9 @@ from oracle_adw_snapshotter.connectors.oracle import OracleConnector
 from oracle_adw_snapshotter.jobs.random_runner import RandomizedExecutionRunner
 from oracle_adw_snapshotter.models.types import AppConfig
 from oracle_adw_snapshotter.services.random_schedule import RandomSchedulePlanner
+
+
+logger = logging.getLogger(__name__)
 
 
 class RandomSchedulerLoop:
@@ -48,6 +52,7 @@ class RandomSchedulerLoop:
                     run_date=today,
                     timezone_name=scheduler_config.timezone,
                     runs_per_day=scheduler_config.runs_per_day,
+                    schedule_name=scheduler_config.schedule_name,
                 )
 
             due_runs = [item for item in day_plan if item.planned_at_local <= now_local]
@@ -94,6 +99,16 @@ class RandomSchedulerLoop:
                 last_exc = exc
                 if not OracleConnector.is_disconnect_error(exc):
                     raise
+                logger.warning(
+                    "Scheduler run hit disconnect; will retry with a fresh connection",
+                    extra={
+                        "attempt": attempt,
+                        "max_attempts": self.max_reconnect_attempts_per_run,
+                        "schedule_name": scheduler_config.schedule_name,
+                        "planned_at_utc": due.planned_at_utc.isoformat(),
+                        "error": str(exc),
+                    },
+                )
                 if attempt >= self.max_reconnect_attempts_per_run:
                     raise
                 self.sleeper(self.reconnect_retry_delay_seconds)

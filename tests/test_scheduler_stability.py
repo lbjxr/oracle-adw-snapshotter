@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from unittest.mock import patch
 
 from oracle_adw_snapshotter.connectors.oracle import OracleConnector
 from oracle_adw_snapshotter.models.types import AppConfig, DatabaseConfig, QueryJob, RandomSchedulerConfig, RuntimeDefaults
@@ -34,7 +35,15 @@ class _FakePlanner:
             )
         ]
 
-    def build_day_plan(self, *, run_date: date, timezone_name: str, runs_per_day: int, seed: int | None = None):
+    def build_day_plan(
+        self,
+        *,
+        run_date: date,
+        timezone_name: str,
+        runs_per_day: int,
+        schedule_name: str = "default",
+        seed: int | None = None,
+    ):
         return list(self._planned)
 
     @staticmethod
@@ -137,8 +146,42 @@ def test_is_disconnect_error_detects_dpy_4011() -> None:
     assert OracleConnector.is_disconnect_error(RuntimeError("some other failure")) is False
 
 
+def test_connector_connect_passes_network_resilience_kwargs() -> None:
+    connector = OracleConnector(
+        DatabaseConfig(
+            user="user",
+            password="password",
+            dsn="dsn",
+            connection_mode="thin",
+            expire_time_minutes=7,
+            retry_count=4,
+            retry_delay_seconds=3,
+            tcp_connect_timeout_seconds=9.5,
+        )
+    )
+
+    with patch("oracle_adw_snapshotter.connectors.oracle.oracledb") as fake_oracledb:
+        fake_oracledb.connect.return_value = object()
+        connection = connector.connect()
+
+    assert connection is fake_oracledb.connect.return_value
+    _, kwargs = fake_oracledb.connect.call_args
+    assert kwargs["expire_time"] == 7
+    assert kwargs["retry_count"] == 4
+    assert kwargs["retry_delay"] == 3
+    assert kwargs["tcp_connect_timeout"] == 9.5
+
+
 class _FixedPlanner:
-    def build_day_plan(self, *, run_date: date, timezone_name: str, runs_per_day: int, seed: int | None = None):
+    def build_day_plan(
+        self,
+        *,
+        run_date: date,
+        timezone_name: str,
+        runs_per_day: int,
+        schedule_name: str = "default",
+        seed: int | None = None,
+    ):
         planned = datetime.now(timezone.utc).astimezone() - timedelta(seconds=1)
         return [ScheduledRun(sequence_no=1, planned_at_local=planned)]
 
@@ -148,7 +191,15 @@ class _FixedPlanner:
 
 
 class _TwoDueRunsPlanner:
-    def build_day_plan(self, *, run_date: date, timezone_name: str, runs_per_day: int, seed: int | None = None):
+    def build_day_plan(
+        self,
+        *,
+        run_date: date,
+        timezone_name: str,
+        runs_per_day: int,
+        schedule_name: str = "default",
+        seed: int | None = None,
+    ):
         planned = datetime.now(timezone.utc).astimezone() - timedelta(seconds=1)
         return [
             ScheduledRun(sequence_no=1, planned_at_local=planned),
@@ -177,7 +228,7 @@ def _build_app_config() -> AppConfig:
             runs_per_day=1,
             parameter_min=10,
             parameter_max=100,
-            read_source_table="SNAPSHOT_JOB_RUNS",
+            read_source_table="SNAPSHOT_SCHEDULE_RUNS",
             read_limit=3,
             poll_interval_seconds=30,
         ),
