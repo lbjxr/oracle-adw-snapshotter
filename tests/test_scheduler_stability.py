@@ -26,30 +26,6 @@ class _FakeResult:
     wrote_count: int = 1
 
 
-class _FakePlanner:
-    def __init__(self) -> None:
-        self._planned = [
-            ScheduledRun(
-                sequence_no=1,
-                planned_at_local=datetime(2026, 4, 23, 8, 0, tzinfo=timezone.utc).astimezone(),
-            )
-        ]
-
-    def build_day_plan(
-        self,
-        *,
-        run_date: date,
-        timezone_name: str,
-        runs_per_day: int,
-        schedule_name: str = "default",
-        seed: int | None = None,
-    ):
-        return list(self._planned)
-
-    @staticmethod
-    def next_wait_seconds(now_local, pending_runs, fallback_seconds: int) -> int:
-        return fallback_seconds
-
 
 class _DisconnectThenSuccessRunner:
     def __init__(self) -> None:
