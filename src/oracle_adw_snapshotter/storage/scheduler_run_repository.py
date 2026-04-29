@@ -1,13 +1,24 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 
 from oracle_adw_snapshotter.storage.snapshot_reader import SnapshotReader
 
 
+@dataclass(slots=True, frozen=True)
+class ScheduleRunClaim:
+    schedule_run_id: int | None
+    status: str
+    already_processed: bool
+    already_finished: bool
+    summary: str | None = None
+
+
 class SchedulerRunRepository:
     schedule_runs_table = "SNAPSHOT_SCHEDULE_RUNS"
     schedule_log_table = "SNAPSHOT_SCHEDULE_LOGS"
+    schedule_runs_unique_index = "UQ_SNAPSHOT_SCHEDULE_RUNS_SLOT"
 
     def ensure_tables(self, connection) -> None:
         cursor = connection.cursor()
@@ -52,10 +63,15 @@ class SchedulerRunRepository:
                 )
                 """,
             )
+            self._ensure_unique_index(
+                cursor,
+                self.schedule_runs_unique_index,
+                f"CREATE UNIQUE INDEX {self.schedule_runs_unique_index} ON {self.schedule_runs_table} (SCHEDULE_NAME, PLANNED_AT_UTC)",
+            )
         finally:
             cursor.close()
 
-    def insert_started(
+    def claim_scheduled_run(
         self,
         connection,
         *,
@@ -63,36 +79,115 @@ class SchedulerRunRepository:
         planned_at_utc: datetime,
         started_at_utc: datetime,
         random_value: int,
-    ) -> int | None:
+    ) -> ScheduleRunClaim:
         self.ensure_tables(connection)
+        existing = self.get_run_by_slot(connection, schedule_name=schedule_name, planned_at_utc=planned_at_utc)
+        if existing is not None:
+            return self._claim_existing_run(
+                connection,
+                existing=existing,
+                started_at_utc=started_at_utc,
+                random_value=random_value,
+            )
+
         cursor = connection.cursor()
         try:
             run_id_var = cursor.var(int)
+            try:
+                cursor.execute(
+                    f"""
+                    INSERT INTO {self.schedule_runs_table} (
+                        SCHEDULE_NAME,
+                        PLANNED_AT_UTC,
+                        STARTED_AT_UTC,
+                        RANDOM_VALUE,
+                        STATUS
+                    ) VALUES (
+                        :schedule_name,
+                        :planned_at_utc,
+                        :started_at_utc,
+                        :random_value,
+                        :status
+                    ) RETURNING SCHEDULE_RUN_ID INTO :schedule_run_id
+                    """,
+                    schedule_name=schedule_name,
+                    planned_at_utc=planned_at_utc,
+                    started_at_utc=started_at_utc,
+                    random_value=random_value,
+                    status="RUNNING",
+                    schedule_run_id=run_id_var,
+                )
+            except Exception as exc:
+                if not self._is_unique_constraint_error(exc):
+                    raise
+                existing = self.get_run_by_slot(connection, schedule_name=schedule_name, planned_at_utc=planned_at_utc)
+                if existing is None:
+                    raise
+                return self._claim_existing_run(
+                    connection,
+                    existing=existing,
+                    started_at_utc=started_at_utc,
+                    random_value=random_value,
+                )
+            value = run_id_var.getvalue()
+            return ScheduleRunClaim(
+                schedule_run_id=int(value[0]) if value else None,
+                status="RUNNING",
+                already_processed=False,
+                already_finished=False,
+            )
+        finally:
+            cursor.close()
+
+    def get_run_by_slot(self, connection, *, schedule_name: str, planned_at_utc: datetime) -> dict | None:
+        cursor = connection.cursor()
+        try:
             cursor.execute(
                 f"""
-                INSERT INTO {self.schedule_runs_table} (
-                    SCHEDULE_NAME,
-                    PLANNED_AT_UTC,
-                    STARTED_AT_UTC,
-                    RANDOM_VALUE,
-                    STATUS
-                ) VALUES (
-                    :schedule_name,
-                    :planned_at_utc,
-                    :started_at_utc,
-                    :random_value,
-                    :status
-                ) RETURNING SCHEDULE_RUN_ID INTO :schedule_run_id
+                SELECT SCHEDULE_RUN_ID,
+                       STATUS,
+                       SUCCESS_FLAG,
+                       SUMMARY
+                FROM {self.schedule_runs_table}
+                WHERE SCHEDULE_NAME = :schedule_name
+                  AND PLANNED_AT_UTC = :planned_at_utc
                 """,
                 schedule_name=schedule_name,
                 planned_at_utc=planned_at_utc,
-                started_at_utc=started_at_utc,
-                random_value=random_value,
-                status="RUNNING",
-                schedule_run_id=run_id_var,
             )
-            value = run_id_var.getvalue()
-            return int(value[0]) if value else None
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return {
+                "schedule_run_id": int(row[0]) if row[0] is not None else None,
+                "status": row[1],
+                "success_flag": row[2],
+                "summary": row[3],
+            }
+        finally:
+            cursor.close()
+
+    def list_processed_planned_slots(self, connection, *, schedule_name: str, planned_at_utc_values: list[datetime]) -> set[datetime]:
+        self.ensure_tables(connection)
+        processed: set[datetime] = set()
+        cursor = connection.cursor()
+        try:
+            for planned_at_utc in planned_at_utc_values:
+                cursor.execute(
+                    f"""
+                    SELECT 1
+                    FROM {self.schedule_runs_table}
+                    WHERE SCHEDULE_NAME = :schedule_name
+                      AND PLANNED_AT_UTC = :planned_at_utc
+                      AND STATUS IN ('RUNNING', 'SUCCESS')
+                    FETCH FIRST 1 ROWS ONLY
+                    """,
+                    schedule_name=schedule_name,
+                    planned_at_utc=planned_at_utc,
+                )
+                if cursor.fetchone():
+                    processed.add(planned_at_utc)
+            return processed
         finally:
             cursor.close()
 
@@ -198,6 +293,47 @@ class SchedulerRunRepository:
         except Exception:
             return []
 
+    def _claim_existing_run(self, connection, *, existing: dict, started_at_utc: datetime, random_value: int) -> ScheduleRunClaim:
+        status = str(existing["status"] or "").upper()
+        if status in {"RUNNING", "SUCCESS"}:
+            return ScheduleRunClaim(
+                schedule_run_id=existing["schedule_run_id"],
+                status=status,
+                already_processed=True,
+                already_finished=(status == "SUCCESS"),
+                summary=existing.get("summary"),
+            )
+
+        schedule_run_id = existing["schedule_run_id"]
+        cursor = connection.cursor()
+        try:
+            cursor.execute(
+                f"""
+                UPDATE {self.schedule_runs_table}
+                SET STARTED_AT_UTC = :started_at_utc,
+                    FINISHED_AT_UTC = NULL,
+                    RANDOM_VALUE = :random_value,
+                    STATUS = 'RUNNING',
+                    SUCCESS_FLAG = NULL,
+                    READ_COUNT = NULL,
+                    WROTE_COUNT = NULL,
+                    SUMMARY = NULL,
+                    ERROR_MESSAGE = NULL
+                WHERE SCHEDULE_RUN_ID = :schedule_run_id
+                """,
+                started_at_utc=started_at_utc,
+                random_value=random_value,
+                schedule_run_id=schedule_run_id,
+            )
+        finally:
+            cursor.close()
+        return ScheduleRunClaim(
+            schedule_run_id=schedule_run_id,
+            status="RUNNING",
+            already_processed=False,
+            already_finished=False,
+        )
+
     @staticmethod
     def _ensure_table(cursor, table_name: str, create_sql: str) -> None:
         cursor.execute(
@@ -211,3 +347,22 @@ class SchedulerRunRepository:
         exists = cursor.fetchone()[0] > 0
         if not exists:
             cursor.execute(create_sql)
+
+    @staticmethod
+    def _ensure_unique_index(cursor, index_name: str, create_sql: str) -> None:
+        cursor.execute(
+            """
+            SELECT COUNT(*)
+            FROM user_indexes
+            WHERE index_name = :index_name
+            """,
+            index_name=index_name.upper(),
+        )
+        exists = cursor.fetchone()[0] > 0
+        if not exists:
+            cursor.execute(create_sql)
+
+    @staticmethod
+    def _is_unique_constraint_error(exc: Exception) -> bool:
+        text = str(exc).upper()
+        return "ORA-00001" in text or "UNIQUE CONSTRAINT" in text

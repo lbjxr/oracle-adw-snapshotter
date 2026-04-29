@@ -27,6 +27,7 @@ class RandomSchedulerLoop:
     ):
         self.planner = planner or RandomSchedulePlanner()
         self.execution_runner = execution_runner or RandomizedExecutionRunner()
+        self.scheduler_run_repository = getattr(self.execution_runner, "scheduler_run_repository", None)
         self.sleeper = sleeper
         self.reconnect_retry_delay_seconds = max(1, int(reconnect_retry_delay_seconds))
         self.max_reconnect_attempts_per_run = max(1, int(max_reconnect_attempts_per_run))
@@ -55,8 +56,14 @@ class RandomSchedulerLoop:
                     schedule_name=scheduler_config.schedule_name,
                 )
 
-            due_runs = [item for item in day_plan if item.planned_at_local <= now_local]
-            pending_runs = [item for item in day_plan if item.planned_at_local > now_local]
+            processed_slots = self._load_processed_slots(
+                connect=connect,
+                schedule_name=scheduler_config.schedule_name,
+                day_plan=day_plan,
+            )
+            runnable_plan = [item for item in day_plan if item.planned_at_utc not in processed_slots]
+            due_runs = [item for item in runnable_plan if item.planned_at_local <= now_local]
+            pending_runs = [item for item in runnable_plan if item.planned_at_local > now_local]
 
             if not due_runs:
                 if once:
@@ -115,3 +122,19 @@ class RandomSchedulerLoop:
 
         assert last_exc is not None
         raise last_exc
+
+    def _load_processed_slots(self, *, connect: Callable[[], object], schedule_name: str, day_plan: list) -> set[datetime]:
+        if not day_plan:
+            return set()
+        if self.scheduler_run_repository is None or not hasattr(self.scheduler_run_repository, "list_processed_planned_slots"):
+            return set()
+        planned_at_utc_values = [item.planned_at_utc for item in day_plan]
+        with connect() as connection:
+            try:
+                return self.scheduler_run_repository.list_processed_planned_slots(
+                    connection,
+                    schedule_name=schedule_name,
+                    planned_at_utc_values=planned_at_utc_values,
+                )
+            except AttributeError:
+                return set()

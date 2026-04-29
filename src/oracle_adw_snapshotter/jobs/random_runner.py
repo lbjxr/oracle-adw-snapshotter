@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from oracle_adw_snapshotter.storage.scheduler_run_repository import SchedulerRunRepository
+from oracle_adw_snapshotter.storage.scheduler_run_repository import ScheduleRunClaim, SchedulerRunRepository
 from oracle_adw_snapshotter.storage.snapshot_reader import SnapshotReader
 
 
@@ -23,6 +23,7 @@ class RandomRunResult:
     summary: str
     read_count: int
     wrote_count: int
+    skipped: bool = False
 
 
 class RandomizedExecutionRunner:
@@ -52,13 +53,33 @@ class RandomizedExecutionRunner:
         rng = random.Random(seed)
         random_value = rng.randint(parameter_min, parameter_max)
         started_at_utc = datetime.now(timezone.utc)
-        schedule_run_id = self.scheduler_run_repository.insert_started(
+        claim = self.scheduler_run_repository.claim_scheduled_run(
             connection,
             schedule_name=schedule_name,
             planned_at_utc=planned_at_utc,
             started_at_utc=started_at_utc,
             random_value=random_value,
         )
+
+        if claim.already_processed:
+            finished_at_utc = started_at_utc
+            summary = claim.summary or f"Skipped already processed scheduled slot {planned_at_utc.isoformat()}"
+            return RandomRunResult(
+                schedule_run_id=claim.schedule_run_id,
+                schedule_name=schedule_name,
+                planned_at_utc=planned_at_utc,
+                started_at_utc=started_at_utc,
+                finished_at_utc=finished_at_utc,
+                random_value=random_value,
+                status=claim.status,
+                success=claim.already_finished,
+                summary=summary,
+                read_count=0,
+                wrote_count=0,
+                skipped=True,
+            )
+
+        schedule_run_id = claim.schedule_run_id
 
         try:
             records = self.scheduler_run_repository.safe_fetch_preview(
