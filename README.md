@@ -8,6 +8,58 @@
 - 任务层
 - 查询层
 - 写入层
+
+## 部署与启动
+
+### 方式一：systemd 服务（推荐）
+
+本项目已配置 systemd 服务文件，可直接安装并启动：
+
+```bash
+# 1. 安装依赖
+cd /root/.openclaw/workspace/tmp/projects/oracle-adw-snapshotter
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# 2. 配置环境变量
+cp .env.example .env
+# 编辑 .env，填入正确的 OCI 配置（region, tenancy, user, fingerprint, passphrase_location）
+
+# 3. 安装 systemd 服务
+sudo cp systemd/oracle-adw-snapshotter-scheduler.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable oracle-adw-snapshotter-scheduler.service
+sudo systemctl start oracle-adw-snapshotter-scheduler.service
+
+# 4. 检查状态
+sudo systemctl status oracle-adw-snapshotter-scheduler.service
+```
+
+服务默认每 6 小时执行一次快照采集（可通过 `--interval-hours` 参数调整）。
+
+### 方式二：手动启动
+
+```bash
+cd /root/.openclaw/workspace/tmp/projects/oracle-adw-snapshotter
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+export $(grep -v '^#' .env | xargs)
+python -m src.scheduler
+```
+
+### 方式三：Docker 启动
+
+```bash
+cd /root/.openclaw/workspace/tmp/projects/oracle-adw-snapshotter
+docker build -t oracle-adw-snapshotter .
+docker run -d \
+  --name oracle-adw-snapshotter \
+  -v ~/.oci:/root/.oci:ro \
+  --env-file .env \
+  oracle-adw-snapshotter
+```
 - 查看 / 导出层
 - 调度层
 
@@ -23,7 +75,7 @@
 - 支持 `run` 执行采集任务
 - 支持 `view` 查看最新快照结果
 - 支持 `export` 导出 JSON / CSV
-- 提供 `scheduler` 随机调度入口，便于后续自动化扩展
+- 提供 `scheduler` 随机调度入口，按随机时间槽实际执行所有已启用 jobs，并保留调度日志与去重机制
 
 ## 项目结构
 
@@ -125,6 +177,15 @@ scheduler:
   read_limit: 3
   poll_interval_seconds: 30
 ```
+
+调度行为说明：
+
+- 到点 slot 会先 claim 对应 `schedule_name + planned_at_utc`，避免重复执行
+- 每个 due slot 会真正执行当前配置里所有 `enabled: true` 的 jobs
+- `SNAPSHOT_SCHEDULE_RUNS.READ_COUNT` 记录本次所有 job 实际写入的总行数
+- `SNAPSHOT_SCHEDULE_RUNS.WROTE_COUNT` 记录本次成功执行的 job 数量
+- `SNAPSHOT_SCHEDULE_LOGS` 继续保留随机值、预览和日志 payload，用于审计
+- `scheduler --once` 仍然只处理当前已到点且未处理的 slot，然后退出
 
 ## 连接约定
 
